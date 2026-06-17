@@ -9,6 +9,7 @@
 #include "HardwareConfig.h"
 #include "controller.h"
 #include <U8g2lib.h>
+#include "../ota_sprites.h"
 
 /**
  * Mutex Lock Order Protocol (ALWAYS acquire in this order to prevent deadlock):
@@ -77,57 +78,51 @@ static void drawBranch(int progress, float rootX, float x, float y, float len, f
 
 static void draw_splashScreen() {
   u8g2.clearBuffer();
-
-  currentLeaf = 0;
-  fallingPeachLeafIndex = -1;
-  drawBranch(100, 32.0f, 32.0f, 64.0f, 12.0f, 0.0f, 0, 1);
-
-
-  // === Text (right of peach) ===
-  u8g2.setFont(u8g2_font_helvB14_tr);
-  u8g2.drawStr(50, 30, "PEACH");
-
-  u8g2.setFont(u8g2_font_helvB18_tr);
-  u8g2.drawStr(66, 54, "PIT");
-
-  // Small version tag
+  u8g2.drawXBMP(24, 0, BOOT_SPRITE_W, BOOT_SPRITE_H, ota_sprite_boot_0);
   u8g2.setFont(u8g2_font_tiny5_tf);
-  u8g2.drawStr(50, 62, "v3.0");
-
+  u8g2.drawStr(24, 55, "Initializing...");
   u8g2.sendBuffer();
+  vTaskDelay(pdMS_TO_TICKS(800));
+
+  u8g2.clearBuffer();
+  u8g2.drawXBMP(24, 0, BOOT_SPRITE_W, BOOT_SPRITE_H, ota_sprite_boot_1);
+  u8g2.setFont(u8g2_font_tiny5_tf);
+  u8g2.drawStr(24, 55, "Starting modules...");
+  u8g2.sendBuffer();
+  vTaskDelay(pdMS_TO_TICKS(800));
+
+  u8g2.clearBuffer();
+  u8g2.drawXBMP(24, 0, BOOT_SPRITE_W, BOOT_SPRITE_H, ota_sprite_boot_2);
+  u8g2.setFont(u8g2_font_tiny5_tf);
+  u8g2.drawStr(24, 55, "Ready!");
+  u8g2.sendBuffer();
+  vTaskDelay(pdMS_TO_TICKS(900));
 }
 
 void draw_wifiStatus(const char* status, const char* ssid, int attempt, bool failed) {
   u8g2.clearBuffer();
 
-  currentLeaf = 0;
-  fallingPeachLeafIndex = -1;
-  drawBranch(100, 32.0f, 32.0f, 64.0f, 12.0f, 0.0f, 0, 1);
-
-  // WiFi Connection text on the right
-  u8g2.setFont(u8g2_font_helvB08_tr);
-  u8g2.drawStr(56, 16, "WiFi Connect");
-  u8g2.drawHLine(56, 20, 72);
+  // Draw static boot sprite centered at the top
+  u8g2.drawXBMP(24, 0, BOOT_SPRITE_W, BOOT_SPRITE_H, ota_sprite_boot_0);
 
   u8g2.setFont(u8g2_font_tiny5_tf);
+  
+  // Format SSID text
   char ssidBuf[32];
   snprintf(ssidBuf, sizeof(ssidBuf), "SSID: %s", ssid);
-  u8g2.drawStr(56, 32, ssidBuf);
-
-  u8g2.drawStr(56, 44, status);
-
-  // Draw loading dots or fail warning
+  u8g2.drawStr(24, 50, ssidBuf);
+  
+  // Format Status text + Animation
+  char statusBuf[48];
   if (failed) {
-    u8g2.drawStr(56, 56, "Rebooting in 5s...");
+      snprintf(statusBuf, sizeof(statusBuf), "%s Rebooting...", status);
   } else {
-    // Show some simple animation based on attempt
-    char anim[16] = "";
-    int dotCount = (attempt % 4);
-    for (int i = 0; i < dotCount; i++) {
-      strcat(anim, ".");
-    }
-    u8g2.drawStr(56, 56, anim);
+      char anim[16] = "";
+      int dotCount = (attempt % 4);
+      for (int i = 0; i < dotCount; i++) strcat(anim, ".");
+      snprintf(statusBuf, sizeof(statusBuf), "%s%s", status, anim);
   }
+  u8g2.drawStr(24, 60, statusBuf);
 
   u8g2.sendBuffer();
 }
@@ -247,27 +242,28 @@ static void drawBranch(int progress, float rootX, float x, float y, float len, f
 }
 
 void draw_otaScreen() {
-  u8g2.clearBuffer();
+  static int lastFrame = -1;
+  int percent = NetworkManager::getOTAProgress();
 
-  int otaProgress = NetworkManager::getOTAProgress();
-  const char* otaStatus = NetworkManager::getOTAStatus();
+  if (percent < 0) percent = 0;
+  if (percent > 100) percent = 100;
 
-  // Reset falling peach tracker for this frame
-  fallingPeachLeafIndex = -1;
-  currentLeaf = 0;
+  int frame;
+  if (percent >= 100) {
+      frame = OTA_SPRITE_COUNT - 1; 
+  } else {
+      frame = (percent * (OTA_SPRITE_COUNT - 1)) / 100;
+  }
 
-  // Draw the growing tree!
-  int startX = 64; // Center
-  int startY = 64; // Bottom of screen
-  float baseTrunkLength = 12.0f; // Shorter trunk
-  
-  drawBranch(otaProgress, startX, startX, startY, baseTrunkLength, 0.0f, 0, 1);
+  if (frame != lastFrame) {
+      u8g2.clearBuffer();
 
-  // UI Overlay - Top Left
-  u8g2.setFont(u8g2_font_tiny5_tf);
-  u8g2.drawStr(0, 10, "PEACH PIT UPDATING");
-
-  u8g2.sendBuffer();
+      const uint8_t* spritePtr = (const uint8_t*)pgm_read_ptr(&ota_sprites[frame]);
+      u8g2.drawXBMP(0, 0, OTA_SPRITE_W, OTA_SPRITE_H, spritePtr);
+      
+      u8g2.sendBuffer();
+      lastFrame = frame;
+  }
 }
 
 void LCDInit() {
@@ -283,7 +279,6 @@ void LCDInit() {
 
   // Show splash screen for 2.5 seconds
   draw_splashScreen();
-  vTaskDelay(pdMS_TO_TICKS(2500));
 
   // Restore the small UI font
   u8g2.setFont(u8g2_font_tiny5_tf);
