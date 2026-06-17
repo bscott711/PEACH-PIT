@@ -159,8 +159,8 @@ def main():
             f.write(f"  ota_sprite_{i},\n")
         f.write("};\n\n")
         
-        # Add special boot sprites for frames 4, 8, 11 (scaled to BOOT_W x BOOT_H)
-        boot_frames = [4, 8, 11]
+        # Add special boot sprites (taking every other frame: 0, 2, 4, 6, 8, 10)
+        boot_frames = [0, 2, 4, 6, 8, 10]
         f.write(f"// Special boot sprites (scaled to {BOOT_W}x{BOOT_H})\n")
         f.write(f"#define BOOT_SPRITE_W {BOOT_W}\n")
         f.write(f"#define BOOT_SPRITE_H {BOOT_H}\n\n")

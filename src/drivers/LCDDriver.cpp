@@ -77,33 +77,37 @@ static int currentLeaf = 0;
 static void drawBranch(int progress, float rootX, float x, float y, float len, float angle, int depth, int pathIndex);
 
 static void draw_splashScreen() {
-  u8g2.clearBuffer();
-  u8g2.drawXBMP(24, 0, BOOT_SPRITE_W, BOOT_SPRITE_H, ota_sprite_boot_0);
-  u8g2.setFont(u8g2_font_tiny5_tf);
-  u8g2.drawStr(24, 55, "Initializing...");
-  u8g2.sendBuffer();
-  vTaskDelay(pdMS_TO_TICKS(800));
+  const uint8_t* boot_sprites[6] = {
+      ota_sprite_boot_0, ota_sprite_boot_1, ota_sprite_boot_2,
+      ota_sprite_boot_3, ota_sprite_boot_4, ota_sprite_boot_5
+  };
+  
+  const char* messages[6] = {
+      "Initializing...",
+      "Loading drivers...",
+      "Starting modules...",
+      "Configuring system...",
+      "Almost there...",
+      "Ready!"
+  };
 
-  u8g2.clearBuffer();
-  u8g2.drawXBMP(24, 0, BOOT_SPRITE_W, BOOT_SPRITE_H, ota_sprite_boot_1);
-  u8g2.setFont(u8g2_font_tiny5_tf);
-  u8g2.drawStr(24, 55, "Starting modules...");
-  u8g2.sendBuffer();
-  vTaskDelay(pdMS_TO_TICKS(800));
-
-  u8g2.clearBuffer();
-  u8g2.drawXBMP(24, 0, BOOT_SPRITE_W, BOOT_SPRITE_H, ota_sprite_boot_2);
-  u8g2.setFont(u8g2_font_tiny5_tf);
-  u8g2.drawStr(24, 55, "Ready!");
-  u8g2.sendBuffer();
-  vTaskDelay(pdMS_TO_TICKS(900));
+  for (int i = 0; i < 6; i++) {
+    u8g2.clearBuffer();
+    u8g2.drawXBMP(24, 0, BOOT_SPRITE_W, BOOT_SPRITE_H, boot_sprites[i]);
+    u8g2.setFont(u8g2_font_tiny5_tf);
+    u8g2.drawStr(24, 55, messages[i]);
+    u8g2.sendBuffer();
+    
+    // 2 fps -> 500ms per frame
+    vTaskDelay(pdMS_TO_TICKS(500));
+  }
 }
 
 void draw_wifiStatus(const char* status, const char* ssid, int attempt, bool failed) {
   u8g2.clearBuffer();
 
   // Draw static boot sprite centered at the top
-  u8g2.drawXBMP(24, 0, BOOT_SPRITE_W, BOOT_SPRITE_H, ota_sprite_boot_0);
+  u8g2.drawXBMP(24, 0, BOOT_SPRITE_W, BOOT_SPRITE_H, ota_sprite_boot_5);
 
   u8g2.setFont(u8g2_font_tiny5_tf);
   
