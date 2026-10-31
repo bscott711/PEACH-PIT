@@ -59,16 +59,17 @@ Line-based ASCII request/reply for driving the PIT from a computer.
 and the arm (SET_SPEED 0, which also cancels a goto or tracked target).
 
 - **Nothing running:** the actuator is held at its current percent.
-- **A run (sequence or goto) is running:** the run is aborted and the actuator is left to the
-  sequence's own abort cleanup, which retracts it to 0 %, exactly as after an encoder E-STOP. STOP
-  does not send an actuator hold in this case (it would race the retract). Once the run has ended
-  the firmware halts Z and the arm once more, so an arm target that landed after STOP does not
-  carry on. That post-run halt does not touch the actuator.
+- **A run exists:** the run is aborted and STOP sends no actuator hold (it would race the run's own
+  abort cleanup). What the actuator does then depends on the run: an `AUTO`/`PARK` sequence's abort
+  cleanup retracts it to 0 %, exactly as after an encoder E-STOP; a goto (`MOVE z`) run leaves the
+  actuator where it is. Once the run has ended the firmware halts Z and the arm once more, so an
+  arm target that landed after STOP does not carry on. That post-run halt does not touch the
+  actuator.
 
 No commands are served during an OTA transfer: it runs synchronously in `loop()`, so neither
 USB nor 6667 is read until it finishes (and the device then reboots). OTA halts the nodes when it
-starts and aborts a running sequence. `ERR OTA` can only be seen in the short window the firmware
-flags `ota=1` at the end of a transfer.
+starts and aborts a running sequence. A client therefore cannot observe `ERR OTA` in practice; the
+code exists only as a defensive policy result.
 
 ## Error codes
 
@@ -81,7 +82,7 @@ flags `ota=1` at the end of a transfer.
 | `NOT_READY` | limits or calibration missing |
 | `UNKNOWN_SEQ` | `RUN` name not in `SEQS` |
 | `TIMEOUT` | the controller did not answer within 250 ms; the command may or may not have run. After `RUN` or `MOVE z`, check `STATUS` `run` (and `state`) to see whether it started. **Never blindly retry `JOG`**: it is relative and has no run id to check, so a retry can move twice. |
-| `OTA` | firmware update in progress, all motion rejected |
+| `OTA` | firmware update in progress, all motion rejected (defensive; not observable in practice, no command is read during a transfer) |
 
 Checks are applied in this order for RUN/MOVE/JOG: `OTA`, `BUSY`, then `NOT_READY`.
 
