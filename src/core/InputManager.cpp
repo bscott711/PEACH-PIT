@@ -378,11 +378,7 @@ void InputManager::handleMenuEncoder() {
                       (armPosOut != -1) && (armPosIn != -1);
         
         if (canRun) {
-          TaskHandle_t autoTaskHandle = NULL;
-          if (xTaskCreate(autonomous_task, "AutoTask", 4096, (void*)0, 2,
-                          &autoTaskHandle) == pdPASS) {
-            xEventGroupSetBits(controlEvents, BIT_AUTO_RUNNING);
-          } else {
+          if (!startSequence(cmdproto::SeqName::AUTO, 0, nullptr)) {
             LCD_setMessage("Error: Task Failed");
             PEACH_LOGE("MENU", "Failed to create autonomous_task");
           }
@@ -390,11 +386,7 @@ void InputManager::handleMenuEncoder() {
           LCD_setMessage("Missing Limits");
         }
       } else if (systemState.s4Menu == S4_STOP) {
-        TaskHandle_t autoTaskHandle = NULL;
-        if (xTaskCreate(autonomous_task, "AutoTask", 4096, (void*)1, 2,
-                        &autoTaskHandle) == pdPASS) {
-          xEventGroupSetBits(controlEvents, BIT_AUTO_RUNNING);
-        } else {
+        if (!startSequence(cmdproto::SeqName::PARK, 0, nullptr)) {
           LCD_setMessage("Error: Task Failed");
           PEACH_LOGE("MENU", "Failed to create shutdown task");
         }
@@ -545,12 +537,7 @@ void InputManager::handleMenuEncoder() {
         return;
       }
 
-      TaskHandle_t gotoTaskHandle = NULL;
-      if (xTaskCreate(motor_goto_task, "GotoTask", 4096,
-                      (void*)(intptr_t)limitIdx, 2,
-                      &gotoTaskHandle) == pdPASS) {
-        xEventGroupSetBits(controlEvents, BIT_AUTO_RUNNING);
-      } else {
+      if (!startSequence(cmdproto::SeqName::GOTO, limitIdx, nullptr)) {
         LCD_setMessage("Error: Task Failed");
       }
     }

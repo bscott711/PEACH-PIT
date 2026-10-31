@@ -15,6 +15,87 @@ extern ArmNode g_armNode;
 extern ActuatorNode g_actuatorNode;
 extern MotorNode g_motorNode;
 
+// ---------------------------------------------------------------------------
+// Run status record (see SequenceEngine.h). Critical sections are copies only.
+// ---------------------------------------------------------------------------
+static portMUX_TYPE s_statusMux = portMUX_INITIALIZER_UNLOCKED;
+static SequenceStatus s_status = {0, cmdproto::SeqName::NONE, 0, 0, cmdproto::Result::NONE};
+
+SequenceStatus sequenceStatus() {
+  portENTER_CRITICAL(&s_statusMux);
+  SequenceStatus copy = s_status;
+  portEXIT_CRITICAL(&s_statusMux);
+  return copy;
+}
+
+static uint32_t statusBegin(cmdproto::SeqName seq, int steps) {
+  portENTER_CRITICAL(&s_statusMux);
+  s_status.run++;
+  s_status.seq = seq;
+  s_status.step = 0;
+  s_status.steps = steps;
+  s_status.result = cmdproto::Result::NONE;
+  uint32_t run = s_status.run;
+  portEXIT_CRITICAL(&s_statusMux);
+  return run;
+}
+
+static void statusStep(int step) {
+  portENTER_CRITICAL(&s_statusMux);
+  s_status.step = step;
+  portEXIT_CRITICAL(&s_statusMux);
+}
+
+// Called by the run's task before it clears BIT_AUTO_RUNNING, so a new run can
+// only begin after this result is in place.
+static void statusFinish(cmdproto::Result result) {
+  portENTER_CRITICAL(&s_statusMux);
+  if (result == cmdproto::Result::DONE) s_status.step = s_status.steps;
+  s_status.result = result;
+  portEXIT_CRITICAL(&s_statusMux);
+}
+
+bool startSequence(cmdproto::SeqName seq, int param, uint32_t *runOut) {
+  if (xEventGroupGetBits(controlEvents) & BIT_AUTO_RUNNING) return false;
+
+  TaskFunction_t entry = nullptr;
+  void *arg = nullptr;
+  const char *name = nullptr;
+  int steps = 0;
+  switch (seq) {
+  case cmdproto::SeqName::AUTO:
+    entry = autonomous_task; arg = (void *)(intptr_t)0; name = "AutoTask"; steps = SEQ_STEPS_AUTO;
+    break;
+  case cmdproto::SeqName::PARK:
+    entry = autonomous_task; arg = (void *)(intptr_t)1; name = "AutoTask"; steps = SEQ_STEPS_PARK;
+    break;
+  case cmdproto::SeqName::GOTO:
+    if (param < 0 || param > 2) return false;
+    entry = motor_goto_task; arg = (void *)(intptr_t)param; name = "GotoTask"; steps = 1;
+    break;
+  default:
+    return false;
+  }
+
+  // A stop that raced with the end of the previous run can leave this bit set;
+  // it must not abort the new run at its first check.
+  xEventGroupClearBits(controlEvents, BIT_ESTOP_REQUEST);
+
+  uint32_t run = statusBegin(seq, steps);
+  // Set the running flag before the task exists: on the second core the task could
+  // otherwise finish (and clear the flag) before we set it, leaving it stuck.
+  xEventGroupSetBits(controlEvents, BIT_AUTO_RUNNING);
+
+  TaskHandle_t handle = NULL;
+  if (xTaskCreate(entry, name, 4096, arg, 2, &handle) != pdPASS) {
+    statusFinish(cmdproto::Result::ABORTED);
+    xEventGroupClearBits(controlEvents, BIT_AUTO_RUNNING);
+    return false;
+  }
+  if (runOut) *runOut = run;
+  return true;
+}
+
 void autonomous_task(void *pvParameters) {
   uint8_t slowSpeed = 128;
   if (xSemaphoreTake(systemStateMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
@@ -53,6 +134,10 @@ void autonomous_task(void *pvParameters) {
 
   const SequenceStep* sequence = (seqType == 1) ? sequence_shutdown : sequence_normal;
   const int numSteps = (seqType == 1) ? 2 : (sizeof(sequence_normal) / sizeof(sequence_normal[0]));
+  static_assert(sizeof(sequence_normal) / sizeof(sequence_normal[0]) == SEQ_STEPS_AUTO,
+                "SEQ_STEPS_AUTO out of date");
+  static_assert(sizeof(sequence_shutdown) / sizeof(sequence_shutdown[0]) == SEQ_STEPS_PARK,
+                "SEQ_STEPS_PARK out of date");
   bool aborted = false;
 
   LCD_setMessage("Auto: Running");
@@ -67,6 +152,8 @@ void autonomous_task(void *pvParameters) {
       aborted = true;
       break;
     }
+
+    statusStep(i + 1);
 
     if (step.message != NULL) {
       LCD_setMessage(step.message);
@@ -381,6 +468,8 @@ void autonomous_task(void *pvParameters) {
     printf("Autonomous Sequence Complete.\n");
   }
 
+  statusFinish(aborted ? cmdproto::Result::ABORTED : cmdproto::Result::DONE);
+
   // Clear the running flag and delete self
   xEventGroupClearBits(controlEvents, BIT_AUTO_RUNNING);
   vTaskDelete(NULL);
@@ -412,6 +501,7 @@ void motor_goto_task(void *pvParameters) {
 
   g_motorNode.setTarget(targetZ, autoSpeed);
 
+  statusStep(1);
   xEventGroupClearBits(controlEvents, BIT_POS_REACHED_Z);
   bool aborted = false;
   while (true) {
@@ -446,6 +536,8 @@ void motor_goto_task(void *pvParameters) {
   } else {
     LCD_setMessage("GOTO Complete");
   }
+
+  statusFinish(aborted ? cmdproto::Result::ABORTED : cmdproto::Result::DONE);
 
   xEventGroupClearBits(controlEvents, BIT_AUTO_RUNNING);
   vTaskDelete(NULL);

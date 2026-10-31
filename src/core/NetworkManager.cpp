@@ -5,7 +5,9 @@
 #include <ArduinoOTA.h>
 #include "HardwareConfig.h"
 #include "messaging.h"
+#include "controller.h" // controlEvents, BIT_AUTO_RUNNING
 #include "drivers/LCDDriver.h" // For draw_wifiStatus
+#include "core/RemoteControl.h"
 #include <esp_log.h>
 
 // WiFi Serial Bridge
@@ -102,6 +104,10 @@ void NetworkManager::init() {
       }
       Serial.println("Start updating " + type);
       
+      // A running sequence would keep commanding motion during the update: abort it.
+      if (controlEvents != NULL && (xEventGroupGetBits(controlEvents) & BIT_AUTO_RUNNING)) {
+        xEventGroupSetBits(controlEvents, BIT_ESTOP_REQUEST | BIT_AUTO_RESUME);
+      }
       // Safety Interlocks
       if (motorCmdQueue != NULL) {
         MotorCommand stopMotor = { MotorCmdAction::SET_SPEED, 0.0f };
@@ -160,6 +166,9 @@ void NetworkManager::init() {
     }
     
     Serial.println("\n--- WiFi Serial Bridge Ready on Port 6666 ---");
+
+    // Remote command server (port 6667) + request queues for the controller task
+    RemoteControl::init();
   }
 }
 
@@ -199,6 +208,8 @@ void NetworkManager::handle() {
         if (wifiSerialClient && wifiSerialClient.connected()) {
             wifiSerialClient.write(txBuf, len);
         }
+        // The same bytes are also remote commands (replies go back on USB)
+        RemoteControl::feedUsb(txBuf, len);
     }
 
     // 3. Forward PlatformIO (Mac) keyboard input -> ESP32 Serial (TX)
@@ -209,6 +220,9 @@ void NetworkManager::handle() {
         size_t len = wifiSerialClient.readBytes(rxBuf, toRead);
         Serial.write(rxBuf, len);
     }
+
+    // --- Remote command port (6667) ---
+    RemoteControl::handle();
 }
 
 bool NetworkManager::isOTAActive() {
