@@ -125,6 +125,10 @@ enum SequenceAction {
 
 Each sequence step can be interrupted by E-STOP events, ensuring safe operation.
 
+### Remote Commands
+
+The PIT can be driven over TCP port 6667 or USB serial with a simple line protocol (PING, STATUS, RUN, MOVE, JOG, STOP). See [docs/PROTOCOL.md](docs/PROTOCOL.md). Host tests: `bash test/host/run_tests.sh`.
+
 ## Configuration
 
 Hardware pins and global constants are located in `src/HardwareConfig.h`.
