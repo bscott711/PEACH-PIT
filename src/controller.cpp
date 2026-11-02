@@ -12,6 +12,7 @@
 #include <cstdio>
 #include "core/SequenceEngine.h"
 #include "core/InputManager.h"
+#include "core/RemoteControl.h"
 // Global queue handles (declared extern in controller.h)
 QueueHandle_t armCmdQueue;
 QueueHandle_t armTelQueue;
@@ -90,6 +91,9 @@ void controller_task(void *pvParameters) {
   while (1) {
     // Process encoder inputs and dispatch commands
     InputManager::process();
+
+    // Execute queued remote RUN/MOVE/JOG (same task as the encoder, so starts never race)
+    RemoteControl::drainPending();
 
     // Build and push UIData
     UIData uiData;

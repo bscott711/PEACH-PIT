@@ -5,7 +5,9 @@
 #include <ArduinoOTA.h>
 #include "HardwareConfig.h"
 #include "messaging.h"
+#include "controller.h" // controlEvents, BIT_AUTO_RUNNING
 #include "drivers/LCDDriver.h" // For draw_wifiStatus
+#include "core/RemoteControl.h"
 #include <esp_log.h>
 
 // WiFi Serial Bridge
@@ -54,6 +56,7 @@ static const char* g_otaStatus = "";
 static const char* ssid = "sdsmtopn"; // From main.cpp
 static const char* HOSTNAME = "peach-pit";
 static const uint16_t SERIAL_BRIDGE_PORT = 6666;
+static const uint16_t REMOTE_COMMAND_PORT = 6667; // Keep in sync with RemoteControl.cpp
 
 // --- Console output / commands -------------------------------------------
 // Replies go to both the USB serial monitor and the WiFi serial client. They
@@ -79,8 +82,9 @@ static void consolePrintf(const char* format, ...) {
 
 static void printIP() {
     if (WiFi.status() == WL_CONNECTED) {
-        consolePrintf("IP address: %s  (%s.local, serial bridge port %u)",
-                      WiFi.localIP().toString().c_str(), HOSTNAME, SERIAL_BRIDGE_PORT);
+        consolePrintf("IP address: %s  (%s.local, monitor port %u, command port %u)",
+                      WiFi.localIP().toString().c_str(), HOSTNAME, SERIAL_BRIDGE_PORT,
+                      REMOTE_COMMAND_PORT);
     } else {
         consolePrintf("IP address: not connected to WiFi");
     }
@@ -98,8 +102,10 @@ static void printInfo() {
                   WiFi.subnetMask().toString().c_str());
     consolePrintf("SSID:     %s   RSSI: %d dBm", ssid, WiFi.RSSI());
     consolePrintf("MAC:      %s", WiFi.macAddress().c_str());
-    consolePrintf("Serial bridge: %s:%u   OTA: %s:3232", WiFi.localIP().toString().c_str(),
-                  SERIAL_BRIDGE_PORT, WiFi.localIP().toString().c_str());
+    consolePrintf("Monitor: %s:%u   Commands: %s:%u   OTA: %s:3232",
+                  WiFi.localIP().toString().c_str(), SERIAL_BRIDGE_PORT,
+                  WiFi.localIP().toString().c_str(), REMOTE_COMMAND_PORT,
+                  WiFi.localIP().toString().c_str());
 }
 
 static void printHelp() {
@@ -112,6 +118,7 @@ static void handleConsoleLine(char* line) {
     size_t n = strlen(line);
     while (n > 0 && (line[n - 1] == ' ' || line[n - 1] == '\t')) line[--n] = '\0';
     if (n == 0) return;
+    if (line[0] == '#') return; // Remote protocol request (RemoteControl answers it)
     for (size_t i = 0; i < n; i++) line[i] = tolower((unsigned char)line[i]);
 
     if (strcmp(line, "ip") == 0) {
@@ -204,6 +211,10 @@ void NetworkManager::init() {
       }
       Serial.println("Start updating " + type);
       
+      // A running sequence would keep commanding motion during the update: abort it.
+      if (controlEvents != NULL && (xEventGroupGetBits(controlEvents) & BIT_AUTO_RUNNING)) {
+        xEventGroupSetBits(controlEvents, BIT_ESTOP_REQUEST | BIT_AUTO_RESUME);
+      }
       // Safety Interlocks
       if (motorCmdQueue != NULL) {
         MotorCommand stopMotor = { MotorCmdAction::SET_SPEED, 0.0f };
@@ -269,6 +280,9 @@ void NetworkManager::init() {
     WiFi.onEvent([](arduino_event_id_t, arduino_event_info_t) {
       PEACH_LOGI("NET", "WiFi (re)connected, IP address: %s", WiFi.localIP().toString().c_str());
     }, ARDUINO_EVENT_WIFI_STA_GOT_IP);
+
+    // Remote command server (port 6667) + request queues for the controller task
+    RemoteControl::init();
   }
 }
 
@@ -313,6 +327,8 @@ void NetworkManager::handle() {
             wifiSerialClient.write(txBuf, len);
         }
         usbLine.feed(txBuf, len);
+        // The same bytes are also remote commands (replies go back on USB)
+        RemoteControl::feedUsb(txBuf, len);
     }
 
     // 3. Forward PlatformIO (Mac) keyboard input -> ESP32 Serial (TX)
@@ -324,6 +340,9 @@ void NetworkManager::handle() {
         Serial.write(rxBuf, len);
         wifiLine.feed(rxBuf, len);
     }
+
+    // --- Remote command port (6667) ---
+    RemoteControl::handle();
 }
 
 bool NetworkManager::isOTAActive() {
