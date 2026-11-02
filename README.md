@@ -91,11 +91,22 @@ Services (replace `<ip>` with the address above):
 
 | Service | Address |
 | --- | --- |
-| Serial/log bridge (TCP) | `<ip>:6666` - one client at a time |
+| Log monitor (TCP) | `<ip>:6666` - one client at a time; a second connection is dropped |
+| Remote commands (TCP) | `<ip>:6667` - used by the pymmcore-gui plugin; one client at a time, a new connection replaces the old one |
+| Remote commands (USB) | USB serial, 115200 baud - same protocol as 6667 |
 | OTA upload | `pio run -t upload --upload-port <ip>` |
 | Monitor over WiFi | `pio device monitor --port socket://<ip>:6666` |
 
+The remote command protocol is in [docs/PROTOCOL.md](docs/PROTOCOL.md). On USB serial, anything the protocol does not understand gets `@0 ERR BAD_CMD`, so a typed `ip` is answered by both the text command and that error; protocol clients ignore every line that does not start with `@`.
+
 If the address keeps changing, ask your network admin for a DHCP reservation using the MAC from `info`.
+
+### Reaching the PIT from a wired PC
+
+The PIT joins the open `sdsmtopn` WiFi. On the campus network a PC on the wired network (such as the microscope PC) cannot reach a device on that WiFi: ping and TCP connections time out, so neither `peach-pit.local` nor the IP address helps. Use one of:
+
+- **USB**: plug the PIT's USB cable into that PC and connect the plugin with `serial://COMx`. This is how the rig is connected.
+- **A router you control**: put the PC and the PIT on the same network (the firmware would need WiFi password support, as it currently only joins an open network).
 
 ## Project Structure
 

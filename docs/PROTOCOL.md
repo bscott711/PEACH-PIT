@@ -15,6 +15,14 @@ Line-based ASCII request/reply for driving the PIT from a computer.
 | USB serial, 115200 | Same commands. Log lines are interleaved with replies; replies start with `@`, so clients ignore every line that does not. Anything typed by hand in the USB console now yields `@0 ERR BAD_CMD` (the same bytes still go to the 6666 bridge). |
 | TCP 6666 | Unchanged: the PlatformIO log monitor. No commands, no replies. |
 
+### Text console commands
+
+Separately from the protocol, the firmware understands a few human-typed commands on USB serial and
+on the 6666 monitor: `ip`, `info` (aliases `status`, `net`) and `help`. They print the WiFi address
+and network details as plain text lines (never starting with `@`). They ignore any line that starts
+with `#`, so protocol requests are answered only by the protocol. Over USB, a typed `ip` is also
+answered by the protocol with `@0 ERR BAD_CMD`; clients ignore that and every other non-`@` line.
+
 ## Wire format
 
 - Request: `#<id> <VERB> [args...]\n`. `id` is a decimal 1..999999 and optional (missing means 0).
