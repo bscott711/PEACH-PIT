@@ -71,6 +71,32 @@ pio run --target upload
 pio device monitor
 ```
 
+## Network Access
+
+On boot the PEACH-PIT joins WiFi and is reachable two ways:
+
+- **By name**: `peach-pit.local` (mDNS). Works on most Macs, but not on every machine or wired network.
+- **By IP address**: use this for any client that can't resolve `.local` (e.g. the acquisition microscope PC).
+
+The IP address is DHCP-assigned, so it can change between boots. To find it:
+
+- **OLED**: after connecting, the boot screen shows `peach-pit.local` and then the IP address.
+- **Serial monitor** (USB or the WiFi bridge on port 6666): type a command and press Enter:
+  - `ip` - print the IP address
+  - `info` - hostname, IP, gateway, subnet, SSID, signal strength, MAC, service ports
+  - `help` - list commands
+- The same info is printed at boot and whenever a client connects to the WiFi serial bridge. If the IP changes after a WiFi reconnect, a `WiFi (re)connected, IP address: ...` log line is emitted.
+
+Services (replace `<ip>` with the address above):
+
+| Service | Address |
+| --- | --- |
+| Serial/log bridge (TCP) | `<ip>:6666` - one client at a time |
+| OTA upload | `pio run -t upload --upload-port <ip>` |
+| Monitor over WiFi | `pio device monitor --port socket://<ip>:6666` |
+
+If the address keeps changing, ask your network admin for a DHCP reservation using the MAC from `info`.
+
 ## Project Structure
 
 ```bash

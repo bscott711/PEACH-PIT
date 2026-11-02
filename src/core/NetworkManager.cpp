@@ -52,6 +52,106 @@ static volatile int g_otaProgress = 0;
 static const char* g_otaStatus = "";
 
 static const char* ssid = "sdsmtopn"; // From main.cpp
+static const char* HOSTNAME = "peach-pit";
+static const uint16_t SERIAL_BRIDGE_PORT = 6666;
+
+// --- Console output / commands -------------------------------------------
+// Replies go to both the USB serial monitor and the WiFi serial client. They
+// are written directly (not via logQueue) so a multi-line reply can't be
+// dropped when the queue is busy. Only call from the loop task (handle/init),
+// which owns wifiSerialClient.
+static void consolePrintf(const char* format, ...) {
+    char buf[160];
+    va_list args;
+    va_start(args, format);
+    int len = vsnprintf(buf, sizeof(buf) - 2, format, args);
+    va_end(args);
+    if (len < 0) return;
+    if (len > (int)sizeof(buf) - 3) len = sizeof(buf) - 3;
+    buf[len++] = '\r';
+    buf[len++] = '\n';
+
+    Serial.write((const uint8_t*)buf, len);
+    if (wifiSerialClient && wifiSerialClient.connected()) {
+        wifiSerialClient.write((const uint8_t*)buf, len);
+    }
+}
+
+static void printIP() {
+    if (WiFi.status() == WL_CONNECTED) {
+        consolePrintf("IP address: %s  (%s.local, serial bridge port %u)",
+                      WiFi.localIP().toString().c_str(), HOSTNAME, SERIAL_BRIDGE_PORT);
+    } else {
+        consolePrintf("IP address: not connected to WiFi");
+    }
+}
+
+static void printInfo() {
+    if (WiFi.status() != WL_CONNECTED) {
+        consolePrintf("WiFi: not connected (SSID %s)", ssid);
+        consolePrintf("MAC: %s", WiFi.macAddress().c_str());
+        return;
+    }
+    consolePrintf("Hostname: %s.local", HOSTNAME);
+    consolePrintf("IP:       %s", WiFi.localIP().toString().c_str());
+    consolePrintf("Gateway:  %s   Subnet: %s", WiFi.gatewayIP().toString().c_str(),
+                  WiFi.subnetMask().toString().c_str());
+    consolePrintf("SSID:     %s   RSSI: %d dBm", ssid, WiFi.RSSI());
+    consolePrintf("MAC:      %s", WiFi.macAddress().c_str());
+    consolePrintf("Serial bridge: %s:%u   OTA: %s:3232", WiFi.localIP().toString().c_str(),
+                  SERIAL_BRIDGE_PORT, WiFi.localIP().toString().c_str());
+}
+
+static void printHelp() {
+    consolePrintf("Commands: ip (show IP address), info (full network info), help");
+}
+
+static void handleConsoleLine(char* line) {
+    // Trim surrounding whitespace and lowercase for matching
+    while (*line == ' ' || *line == '\t') line++;
+    size_t n = strlen(line);
+    while (n > 0 && (line[n - 1] == ' ' || line[n - 1] == '\t')) line[--n] = '\0';
+    if (n == 0) return;
+    for (size_t i = 0; i < n; i++) line[i] = tolower((unsigned char)line[i]);
+
+    if (strcmp(line, "ip") == 0) {
+        printIP();
+    } else if (strcmp(line, "info") == 0 || strcmp(line, "status") == 0 || strcmp(line, "net") == 0) {
+        printInfo();
+    } else if (strcmp(line, "help") == 0 || strcmp(line, "?") == 0) {
+        printHelp();
+    } else {
+        consolePrintf("Unknown command '%s'. Type 'help'.", line);
+    }
+}
+
+// Accumulates characters from one input source until a newline, then runs the line.
+struct ConsoleLineBuffer {
+    char buf[32];
+    size_t len = 0;
+    bool overflow = false;
+
+    void feed(const uint8_t* data, size_t count) {
+        for (size_t i = 0; i < count; i++) {
+            char c = (char)data[i];
+            if (c == '\n' || c == '\r') {
+                if (!overflow) {
+                    buf[len] = '\0';
+                    handleConsoleLine(buf);
+                }
+                len = 0;
+                overflow = false;
+            } else if (len < sizeof(buf) - 1) {
+                buf[len++] = c;
+            } else {
+                overflow = true; // Too long to be a command; discard until newline
+            }
+        }
+    }
+};
+
+static ConsoleLineBuffer usbLine;
+static ConsoleLineBuffer wifiLine;
 
 void NetworkManager::init() {
   WiFi.mode(WIFI_STA);
@@ -83,9 +183,11 @@ void NetworkManager::init() {
   Serial.println("WiFi Connected!");
   draw_wifiStatus("peach-pit.local", ssid, 0, false);
   delay(2000); // Show name for 2 seconds
+  draw_wifiStatus(WiFi.localIP().toString().c_str(), ssid, 0, false);
+  delay(2000); // Show IP for 2 seconds (for clients that can't resolve .local)
 
   // Initialize ArduinoOTA
-  ArduinoOTA.setHostname("peach-pit");
+  ArduinoOTA.setHostname(HOSTNAME);
 
   ArduinoOTA
     .onStart([]() {
@@ -143,14 +245,12 @@ void NetworkManager::init() {
     });
 
   if (WiFi.status() == WL_CONNECTED) {
-    if (MDNS.begin("peach-pit")) {
+    if (MDNS.begin(HOSTNAME)) {
       Serial.println("mDNS responder started: peach-pit.local");
     }
-    ArduinoOTA.setHostname("peach-pit");
+    ArduinoOTA.setHostname(HOSTNAME);
     ArduinoOTA.begin();
     Serial.println("OTA Ready");
-    Serial.print("IP address: ");
-    Serial.println(WiFi.localIP());
 
     // Start WiFi Serial Bridge
     wifiSerialServer.begin();
@@ -158,8 +258,17 @@ void NetworkManager::init() {
     if (logQueue == NULL) {
         logQueue = xQueueCreate(20, 128); // 20 messages, 128 bytes each
     }
-    
+
     Serial.println("\n--- WiFi Serial Bridge Ready on Port 6666 ---");
+    printInfo();
+    consolePrintf("Type 'ip' or 'info' at any time to show this again.");
+
+    // DHCP can hand out a different address after a reconnect/lease change;
+    // announce it so a stale IP isn't used by mistake. Registered after the
+    // initial connect so it only reports changes after boot.
+    WiFi.onEvent([](arduino_event_id_t, arduino_event_info_t) {
+      PEACH_LOGI("NET", "WiFi (re)connected, IP address: %s", WiFi.localIP().toString().c_str());
+    }, ARDUINO_EVENT_WIFI_STA_GOT_IP);
   }
 }
 
@@ -174,6 +283,10 @@ void NetworkManager::handle() {
             if (wifiSerialClient) wifiSerialClient.stop(); // Kick old client
             wifiSerialClient = wifiSerialServer.available();
             wifiSerialClient.println("\n\n--- CONNECTED TO PEACH-PIT WIFI SERIAL ---");
+            wifiLine.len = 0; // Drop any partial command from a previous client
+            wifiLine.overflow = false;
+            printIP();
+            printHelp();
         } else {
             wifiSerialServer.available().stop(); // Reject if already connected
         }
@@ -199,6 +312,7 @@ void NetworkManager::handle() {
         if (wifiSerialClient && wifiSerialClient.connected()) {
             wifiSerialClient.write(txBuf, len);
         }
+        usbLine.feed(txBuf, len);
     }
 
     // 3. Forward PlatformIO (Mac) keyboard input -> ESP32 Serial (TX)
@@ -208,6 +322,7 @@ void NetworkManager::handle() {
         size_t toRead = available > sizeof(rxBuf) ? sizeof(rxBuf) : available;
         size_t len = wifiSerialClient.readBytes(rxBuf, toRead);
         Serial.write(rxBuf, len);
+        wifiLine.feed(rxBuf, len);
     }
 }
 
